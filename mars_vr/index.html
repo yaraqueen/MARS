@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#000000">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<title>Mars Landing VR HUD</title>
+<link rel="icon" href="data:,">
+<!-- onnxruntime-web: local copy first (works offline), internet copy only as a fallback -->
+<script src="ort/ort.min.js"></script>
+<script>
+  window.ORT_LOCAL = typeof ort !== "undefined";
+  if (!window.ORT_LOCAL) document.write('<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js"><\/script>');
+</script>
+<style>
+  :root {
+    --bg: #05070a;
+    --panel: #0e1319;
+    --line: #22303c;
+    --text: #e6edf3;
+    --muted: #8b9aa8;
+    --hud: #3cff8f;
+    --warn: #ffd23c;
+    --danger: #ff4a4a;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: var(--bg); color: var(--text); overflow: hidden;
+    font-family: "Segoe UI", Tahoma, Arial, sans-serif; -webkit-tap-highlight-color: transparent; }
+  #menu { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 2; overflow-y: auto; }
+  .card { width: 100%; max-width: 480px; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 14px; padding: 24px; display: flex; flex-direction: column; gap: 14px; margin: auto; }
+  h1 { font-size: 22px; letter-spacing: .5px; direction: ltr; text-align: center; color: var(--hud); }
+  .sub { color: var(--muted); text-align: center; font-size: 14px; line-height: 1.7; }
+  .status { font-size: 13px; padding: 10px 12px; border-radius: 8px; background: #0a0f14; border: 1px solid var(--line); line-height: 1.7; }
+  .status.ok { border-color: var(--hud); color: var(--hud); }
+  .status.bad { border-color: var(--warn); color: var(--warn); }
+  button { font: inherit; font-size: 16px; padding: 14px; border-radius: 10px; border: 1px solid var(--line);
+    background: #16202a; color: var(--text); cursor: pointer; }
+  button.primary { background: var(--hud); color: #04150b; border-color: var(--hud); font-weight: 700; }
+  button:disabled { opacity: .45; cursor: default; }
+  #btnXR { display: none; }
+  label.file { font-size: 13px; color: var(--muted); display: flex; flex-direction: column; gap: 6px; }
+  label.check { font-size: 14px; display: flex; align-items: center; gap: 8px; cursor: pointer; }
+  label.check input { width: 18px; height: 18px; accent-color: var(--hud); flex: none; }
+  .hint { font-size: 12px; color: var(--muted); line-height: 1.9; }
+  .note { font-size: 12px; color: var(--warn); line-height: 1.8; border-top: 1px solid var(--line); padding-top: 10px; }
+  #view { position: fixed; inset: 0; width: 100vw; height: 100vh; display: none; background: #000; touch-action: none;
+    -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+</style>
+</head>
+<body>
+
+<div id="menu">
+  <div class="card">
+    <h1>MARS LANDING VR HUD</h1>
+    <p class="sub">واقع افتراضي: أنت تحلّق فوق سطح المريخ، والـ HUD يقيّم الموقع اللي تنظر له: آمن للهبوط أو لا</p>
+    <p id="status" class="status">جاري تجهيز سطح المريخ...</p>
+    <p id="modelStatus" class="status">جاري البحث عن الموديل...</p>
+    <label class="check"><input type="checkbox" id="vrMode"> عرض مزدوج للنظارة (الجوال داخل نظارة VR)</label>
+    <label class="check"><input type="checkbox" id="gazeLand" checked> الهبوط والإقلاع بالنظر بدون لمس (ثبّت نظرك على الموقع)</label>
+    <label class="check"><input type="checkbox" id="overlay"> تلوين الأرض بخريطة المخاطر (أخضر / أصفر / أحمر)</label>
+    <label class="check"><input type="checkbox" id="autoDemo"> سيناريو أعطال تلقائي للعرض (تسرب ثم انقطاع اتصال)</label>
+    <button id="btnStart" class="primary" disabled>ابدأ الرحلة إلى المريخ</button>
+    <button id="btnXR">دخول بنظارة WebXR (مثل Meta Quest)</button>
+    <label class="file">ملف الموديل (.onnx) لو ما انحمل تلقائيًا (اختياري):
+      <input type="file" id="modelFile" accept=".onnx">
+    </label>
+    <p class="hint">
+      <b>النظر:</b> حرّك راسك (الجوال أو النظارة)، أو اسحب بالماوس أو الإصبع<br>
+      <b>الهبوط:</b> ثبّت نظرك على موقع أخضر أو أصفر 4 ثواني · أو لمسة · أو Space<br>
+      <b>الإقلاع بعد الهبوط:</b> ارفع راسك للسماء 3 ثواني · أو لمسة · أو Space<br>
+      <b>الرجوع للقائمة:</b> لمستين أو Esc · <b>التحرك في الجو:</b> W A S D أو الأسهم · <b>خريطة المخاطر:</b> H<br>
+      أعطال للعرض: ضغطة طويلة = تسرب ← ثم انقطاع اتصال ← ثم رجوع طبيعي · بالكيبورد: <b>1</b> تسرب · <b>2</b> انقطاع الاتصال · <b>0</b> إعادة ضبط
+    </p>
+    <p class="note">
+      سطح المريخ هنا تضاريس مولّدة بالحاسب وليست خريطة حقيقية. تقييم الهبوط يُحسب من هندسة هذا السطح الافتراضي (ميل، خشونة، صخور، فوهات) بحدود مرجعية للعرض وليست معايير مهمة معتمدة.
+      الموديل مدرب على صور من سطح القمر ولم يُختبر على المريخ. قراءات البدلة والأكسجين والاتصال محاكاة. التوجيه بصري فقط وليس ملاحة مُتحقق منها.
+    </p>
+  </div>
+</div>
+
+<canvas id="view" dir="ltr"></canvas>
+
+<script>
+  // أي خطأ يمنع التشغيل يطلع للمستخدم بدل ما تبقى الصفحة على "جاري..."
+  window.__bootError = function (msg) {
+    var el = document.getElementById("status");
+    el.textContent = msg; el.className = "status bad";
+  };
+  window.addEventListener("error", function (e) {
+    if (window.__hud && window.__hud.ready) return;
+    var src = e.target && e.target.src;
+    window.__bootError(src ? "ما انحمل الملف: " + src.split("/").pop() + " — تأكدوا إن كل ملفات ومجلدات mars_vr موجودة بجانب الصفحة."
+      : "خطأ أثناء التشغيل: " + (e.message || "غير معروف"));
+  }, true);
+</script>
+<script src="mars_logic.js"></script>
+<script src="lib/three.min.js"></script>
+<script src="mars_app.js"></script>
+</body>
+</html>
